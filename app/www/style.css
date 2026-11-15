@@ -72,7 +72,8 @@ details[open] summary { margin-bottom: 8px; }
 .daynav { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .daynav h2 { flex: 1; text-align: center; min-width: 200px; }
 
-.rform .f-days, .rform .f-date, .rform .f-before { display: none; }
+.rform .f-days, .rform .f-date, .rform .f-before, .rform .f-day { display: none; }
+.rform[data-type=monthly] .f-day { display: flex; }
 .rform[data-type=weekly] .f-days { display: flex; }
 .rform[data-type=once] .f-date, .rform[data-type=yearly] .f-date, .rform[data-type=yearly] .f-before { display: flex; }
 .days { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -102,3 +103,15 @@ nav button.active { color: #fff; box-shadow: inset 0 3px 0 var(--accent); }
 dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 16px; width: min(520px, 92vw); padding: 20px; }
 dialog::backdrop { background: rgba(0,0,0,.6); }
 dialog form { display: flex; flex-direction: column; gap: 10px; }
+
+/* Coches du programme, prochaines actions */
+button.chk { width: 40px; min-height: 36px; padding: 0; background: var(--soft); border-color: var(--line); color: var(--muted); font-size: 1.1rem; }
+button.chk.yes { background: var(--ok); border-color: var(--ok); color: #06261a; }
+button.chk.no { background: var(--danger); border-color: var(--danger); color: #fff; }
+.next { background: var(--card); border-radius: 8px; padding: 6px 8px; font-size: .9rem; }
+.warn { color: var(--warn); }
+.okc { color: var(--ok); }
+.line { display: flex; flex-direction: column; gap: 4px; }
+.line .bar { flex: none; }
+dialog#edit { display: none; flex-direction: column; gap: 10px; max-height: 90vh; overflow: auto; }
+dialog#edit[open] { display: flex; }
