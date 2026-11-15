@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16213e">
+<title>Ma Vie – Tableau de bord</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="main"></main>
+
+<button class="fab" data-a="capture" title="Noter quelque chose">＋</button>
+
+<dialog id="capture">
+  <form data-f="capture">
+    <h2>Noter tout de suite</h2>
+    <p class="muted">Une idée, une tâche, un rendez-vous : écris-le pour ne pas l'oublier. Tu le rangeras plus tard.</p>
+    <textarea name="text" rows="3" required placeholder="Ex. : appeler le comptable, idée de service…"></textarea>
+    <div class="row end">
+      <button type="button" class="ghost" data-a="capture-close">Annuler</button>
+      <button>Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
+<nav>
+  <button data-a="tab" data-tab="today">🏠<span>Aujourd'hui</span></button>
+  <button data-a="tab" data-tab="projects">🎯<span>Projets</span></button>
+  <button data-a="tab" data-tab="learn">📚<span>Formation</span></button>
+  <button data-a="tab" data-tab="week">📅<span>Semaine</span></button>
+  <button data-a="tab" data-tab="energy">⚡<span>Énergie</span></button>
+</nav>
+<script src="app.js"></script>
+</body>
+</html>
