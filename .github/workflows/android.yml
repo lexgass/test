@@ -1,0 +1,51 @@
+name: Construire l'application Android
+
+on:
+  push:
+    branches: ['claude/time-exploitation-life-management-eb1ber', 'main']
+    paths: ['app/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # pour publier l'APK dans « Releases »
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Installer les dépendances
+        run: npm ci
+      - name: Préparer le projet Android
+        run: npm run sync
+      - name: Compiler l'APK
+        working-directory: app/android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+      - run: cp android/app/build/outputs/apk/release/app-release.apk MaVie.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaVie-apk
+          path: app/MaVie.apk
+      - name: Publier l'APK (onglet Releases)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v1.0.${{ github.run_number }}" MaVie.apk \
+            --target "${{ github.sha }}" \
+            --title "Ma Vie 1.0.${{ github.run_number }}" \
+            --notes "Télécharge MaVie.apk depuis ta tablette et installe-le (par-dessus l'ancienne version si besoin)." \
+            --latest

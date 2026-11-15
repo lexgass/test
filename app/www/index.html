@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ma Vie</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav id="nav"></nav>
+<main id="main"></main>
+
+<button class="fab" data-a="capture" title="Noter quelque chose">＋</button>
+
+<dialog id="capture">
+  <form data-f="capture">
+    <h2>Noter tout de suite</h2>
+    <p class="muted">Une idée, une tâche, un rendez-vous : écris-le maintenant pour ne pas l'oublier. Tu le rangeras plus tard.</p>
+    <textarea name="text" rows="3" required placeholder="Ex. : appeler le comptable, idée de cadeau…"></textarea>
+    <div class="row end">
+      <button type="button" class="ghost" data-a="capture-close">Annuler</button>
+      <button>Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="native.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

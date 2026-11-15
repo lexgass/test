@@ -1,0 +1,11 @@
+{
+  "appId": "com.mavie.centre",
+  "appName": "Ma Vie",
+  "webDir": "www",
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_notify",
+      "iconColor": "#4F8CFF"
+    }
+  }
+}
