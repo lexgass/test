@@ -33,6 +33,8 @@ let S;                       // état (chargé plus bas)
 let tab = 'home';
 let agendaDay = null;        // jour affiché dans l'agenda
 let reviewMode = 'week';     // bilan : 'week' ou 'month'
+let persoUnlocked = false;   // espace Perso déverrouillé (jusqu'à ce qu'on le quitte ou que l'app passe en arrière-plan)
+let pinFails = 0, pinBlockedUntil = 0;
 let alertState = { perm: NATIVE ? 'inconnu' : 'web', exact: null, count: 0, error: '' };
 
 // ---------- Outils ----------
@@ -57,6 +59,15 @@ const areaTag = a => `<span class="tag" style="color:${AREAS[a].color};border-co
 const inDays = n => (n === 0 ? "aujourd'hui" : n === 1 ? 'demain' : n < 0 ? `il y a ${-n} j` : `dans ${n} jours`);
 const opts = (pairs, sel) => pairs.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(l)}</option>`).join('');
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : null);
+// Espace Perso protégé : tant qu'il est verrouillé, ses éléments sont masqués partout ailleurs.
+const PRIVATE_LABEL = '🔒 Élément privé';
+const hidden = area => area === 'perso' && !!S.pin && !persoUnlocked;
+const shown = (area, text) => (hidden(area) ? PRIVATE_LABEL : text);
+async function hashPin(pin, salt) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`));
+  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+const checkPin = async pin => !!S.pin && (await hashPin(pin, S.pin.salt)) === S.pin.hash;
 function weekStart(s = today()) { const d = parse(s); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return ds(d); }
 function day(d = today()) { return (S.days[d] ||= { focus: [0, 1, 2].map(() => ({ text: '', done: false, task: '' })), energy: 0, habits: {} }); }
 const inWeek = (s, wk = weekStart()) => weekStart(s) === wk;
@@ -313,7 +324,9 @@ function buildNotifications() {
   for (const r of S.reminders) {
     if (!r.alert) continue;
     const [h, m] = r.time.split(':').map(Number);
-    const title = `${AREAS[r.area].icon} ${r.title}`, body = r.note || AREAS[r.area].label, extra = { kind: 'r', id: r.id };
+    const secret = r.area === 'perso' && S.pin && S.pin.hideNotif;
+    const title = secret ? '❤️ Rappel privé' : `${AREAS[r.area].icon} ${r.title}`;
+    const body = secret ? 'Ouvre Ma Vie pour voir le détail' : r.note || AREAS[r.area].label, extra = { kind: 'r', id: r.id };
     if (r.type === 'daily') add(title, body, { on: { hour: h, minute: m } }, extra);
     else if (r.type === 'weekly') r.days.forEach(d => add(title, body, { on: { weekday: d + 1, hour: h, minute: m } }, extra));
     else if (r.type === 'monthly') add(title, body, { on: { day: +r.day, hour: h, minute: m } }, extra);
@@ -332,7 +345,8 @@ function buildNotifications() {
   for (const t of S.tasks) {
     if (t.done || !t.remind || !t.due) continue;
     const at = new Date(`${t.due}T${t.time || '09:00'}`);
-    if (at > now) add(`${AREAS[t.area].icon} ${t.title}`, 'Tâche prévue maintenant', { at }, { kind: 't', id: t.id });
+    const secret = t.area === 'perso' && S.pin && S.pin.hideNotif;
+    if (at > now) add(secret ? '❤️ Tâche privée' : `${AREAS[t.area].icon} ${t.title}`, 'Tâche prévue maintenant', { at }, { kind: 't', id: t.id });
   }
   return out;
 }
@@ -424,12 +438,12 @@ function taskLine(t, showArea) {
   const proj = t.project && S.projects.find(p => p.id === t.project);
   return `<li class="${t.done ? 'off' : ''}">
     <input type="checkbox" data-a="task-done" data-id="${t.id}" ${t.done ? 'checked' : ''}>
-    <span class="grow ${t.done ? 'done' : ''}">${t.priority === 'haute' && !t.done ? '🔥 ' : ''}${esc(t.title)}
-      ${proj ? `<br><span class="muted small">↳ ${esc(proj.title)}</span>` : ''}
+    <span class="grow ${t.done ? 'done' : ''}">${t.priority === 'haute' && !t.done ? '🔥 ' : ''}${esc(shown(t.area, t.title))}
+      ${proj && !hidden(t.area) ? `<br><span class="muted small">↳ ${esc(proj.title)}</span>` : ''}
       ${showArea ? `<br>${areaTag(t.area)}` : ''}</span>
     ${t.due ? `<span class="tag ${late ? 'hot' : ''}">${t.remind ? '🔔 ' : ''}${shortDate(t.due)}${t.time ? ' ' + t.time : ''}</span>` : ''}
     ${late ? `<button class="small ghost" data-a="task-tomorrow" data-id="${t.id}">→ demain</button>` : ''}
-    <button class="icon" data-a="task-edit" data-id="${t.id}" title="Modifier">✏️</button>
+    ${hidden(t.area) ? '' : `<button class="icon" data-a="task-edit" data-id="${t.id}" title="Modifier">✏️</button>`}
   </li>`;
 }
 function sortTasks(list) {
@@ -463,10 +477,10 @@ function whenText(r) {
 function reminderLine(r, showArea) {
   return `<li class="${r.alert ? '' : 'off'}">
     <span class="time">${esc(r.time)}</span>
-    <span class="grow">${esc(r.title)}<br><span class="muted small">${esc(whenText(r))}${r.duration ? ` · ${fmtMin(r.duration)}` : ''}${r.track ? ' · suivi ✓' : ''}</span></span>
+    <span class="grow">${esc(shown(r.area, r.title))}<br><span class="muted small">${esc(whenText(r))}${r.duration ? ` · ${fmtMin(r.duration)}` : ''}${r.track ? ' · suivi ✓' : ''}</span></span>
     ${showArea ? areaTag(r.area) : ''}
     <button class="icon" data-a="rem-toggle" data-id="${r.id}" title="${r.alert ? 'Couper l’alerte' : 'Activer l’alerte'}">${r.alert ? '🔔' : '🔕'}</button>
-    <button class="icon" data-a="rem-edit" data-id="${r.id}" title="Modifier">✏️</button>
+    ${hidden(r.area) ? '' : `<button class="icon" data-a="rem-edit" data-id="${r.id}" title="Modifier">✏️</button>`}
   </li>`;
 }
 function reminderForm(area, type = 'weekly', r = null, fname = 'rem-add') {
@@ -627,7 +641,7 @@ function vHome() {
   const openTasks = sortTasks(S.tasks.filter(x => !x.done));
   return `
   <h1>${longDate(t)}</h1>
-  <p class="sub">${nx ? `🔔 Prochaine alerte : <b>${esc(nx.r.title)}</b>, ${nx.s === t ? "aujourd'hui" : shortDate(nx.s)} à ${nx.r.time}` : 'Aucune alerte programmée.'}
+  <p class="sub">${nx ? `🔔 Prochaine alerte : <b>${esc(shown(nx.r.area, nx.r.title))}</b>, ${nx.s === t ? "aujourd'hui" : shortDate(nx.s)} à ${nx.r.time}` : 'Aucune alerte programmée.'}
     ${adh.planned ? ` · Régularité de la semaine : <b>${adh.pct} %</b>` : ''}</p>
   ${alertBanner()}
   ${sunday ? `<div class="banner"><span class="grow">C'est dimanche : prends 20 minutes pour ton bilan de la semaine.</span><button class="ghost" data-a="go-review" data-m="week">Faire mon bilan →</button></div>` : ''}
@@ -637,13 +651,13 @@ function vHome() {
       ${items.length ? `<ul class="list">${items.map(it => agendaLine(it, t)).join('')}</ul>` : '<p class="muted">Rien de prévu.</p>'}
     </section>
     <section class="card"><header><h2>🎯 Mes 3 priorités du jour</h2></header>
-      ${d.focus.map((p, i) => `<div class="row">
+      ${d.focus.map((p, i) => { const ft = p.task && task(p.task), masked = ft && hidden(ft.area); return `<div class="row">
         <input type="checkbox" data-a="focus-done" data-i="${i}" ${p.done ? 'checked' : ''}>
-        <input class="grow ${p.done ? 'done' : ''}" data-c="focus-text" data-i="${i}" value="${esc(p.text)}" placeholder="Priorité ${i + 1}">
+        <input class="grow ${p.done ? 'done' : ''}" data-c="focus-text" data-i="${i}" value="${esc(masked ? PRIVATE_LABEL : p.text)}" placeholder="Priorité ${i + 1}" ${masked ? 'readonly' : ''}>
         ${p.task ? '<span class="tag" title="Liée à une tâche">🔗</span>' : ''}
-      </div>`).join('')}
+      </div>`; }).join('')}
       ${openTasks.length && d.focus.some(f => !f.text) ? `<select data-c="focus-pick"><option value="">＋ Choisir parmi mes tâches…</option>
-        ${LIFE.concat('general').map(a => { const ts = openTasks.filter(x => x.area === a); return ts.length ? `<optgroup label="${AREAS[a].icon} ${AREAS[a].label}">${opts(ts.map(x => [x.id, x.title]))}</optgroup>` : ''; }).join('')}</select>` : ''}
+        ${LIFE.concat('general').map(a => { const ts = openTasks.filter(x => x.area === a && !hidden(x.area)); return ts.length ? `<optgroup label="${AREAS[a].icon} ${AREAS[a].label}">${opts(ts.map(x => [x.id, x.title]))}</optgroup>` : ''; }).join('')}</select>` : ''}
     </section>
     ${sportGoalCard(true)}
     ${businessGoalCard()}
@@ -658,7 +672,7 @@ function vHome() {
     </section>
     <section class="card"><header><h2>➡️ Mes projets : prochaines actions</h2></header>
       <ul class="list">${S.projects.map(p => { const na = nextAction(p); return `<li class="top"><span class="dot" style="background:${AREAS[p.area].color};margin-top:6px"></span>
-        <span class="grow"><b>${esc(p.title)}</b><br>${na ? `<span class="small">${esc(na.title)}</span>` : '<span class="small warn">⚠️ Aucune prochaine action</span>'}</span>
+        <span class="grow"><b>${esc(shown(p.area, p.title))}</b><br>${na ? `<span class="small">${esc(shown(p.area, na.title))}</span>` : '<span class="small warn">⚠️ Aucune prochaine action</span>'}</span>
         ${na ? `<input type="checkbox" data-a="task-done" data-id="${na.id}" title="Fait">` : ''}</li>`; }).join('')}</ul>
       ${stuck.length ? `<p class="muted small">Un projet sans prochaine action n'avance pas : ajoute-lui une tâche.</p>` : ''}
     </section>
@@ -675,11 +689,11 @@ function vHome() {
 }
 function agendaLine(it, s) {
   if (it.kind === 't') return `<li><span class="time">${esc(it.time || '—')}</span><input type="checkbox" data-a="task-done" data-id="${it.t.id}" ${it.t.done ? 'checked' : ''}>
-    <span class="grow ${it.t.done ? 'done' : ''}">${esc(it.title)}</span>${areaTag(it.area)}</li>`;
+    <span class="grow ${it.t.done ? 'done' : ''}">${esc(shown(it.area, it.title))}</span>${areaTag(it.area)}</li>`;
   const r = it.r, c = check(s, r.id), canCheck = r.track && s <= today();
   const missed = canCheck && !c && isDue(r, s) && s < today();
   return `<li class="${r.alert || r.track ? '' : 'off'}"><span class="time">${esc(it.time)}</span><span class="dot" style="background:${AREAS[it.area].color}"></span>
-    <span class="grow ${c === 'done' ? 'done' : ''}">${esc(it.title)}${missed ? ' <span class="tag hot">non coché</span>' : ''}</span>
+    <span class="grow ${c === 'done' ? 'done' : ''}">${esc(shown(it.area, it.title))}${missed ? ' <span class="tag hot">non coché</span>' : ''}</span>
     ${canCheck ? `<button class="chk ${c === 'done' ? 'yes' : ''}" data-a="check" data-id="${r.id}" data-d="${s}" data-v="done" title="Fait">✓</button>
       <button class="chk ${c === 'skip' ? 'no' : ''}" data-a="check" data-id="${r.id}" data-d="${s}" data-v="skip" title="Pas fait">✗</button>` : (r.alert ? '🔔' : '')}
   </li>`;
@@ -693,10 +707,10 @@ function balanceCard(wk = weekStart()) {
 }
 function upcomingCard() {
   const t = today(), out = [];
-  S.reminders.filter(r => r.type === 'yearly').forEach(r => { const s = nextYearly(r.date.slice(5)); const n = daysBetween(t, s); if (n <= 45) out.push([n, `${AREAS[r.area].icon} ${r.title}`, s]); });
+  S.reminders.filter(r => r.type === 'yearly').forEach(r => { const s = nextYearly(r.date.slice(5)); const n = daysBetween(t, s); if (n <= 45) out.push([n, `${AREAS[r.area].icon} ${shown(r.area, r.title)}`, s]); });
   S.trainings.filter(x => x.examDate && x.examDate >= t).forEach(x => out.push([daysBetween(t, x.examDate), `🎓 Examen ${x.title}`, x.examDate]));
-  S.projects.filter(p => p.deadline && p.deadline >= t).forEach(p => { const n = daysBetween(t, p.deadline); if (n <= 60) out.push([n, `${AREAS[p.area].icon} Échéance : ${p.title}`, p.deadline]); });
-  S.tasks.filter(x => !x.done && x.due && x.due > t && daysBetween(t, x.due) <= 7).forEach(x => out.push([daysBetween(t, x.due), `${AREAS[x.area].icon} ${x.title}`, x.due]));
+  S.projects.filter(p => p.deadline && p.deadline >= t).forEach(p => { const n = daysBetween(t, p.deadline); if (n <= 60) out.push([n, `${AREAS[p.area].icon} Échéance : ${shown(p.area, p.title)}`, p.deadline]); });
+  S.tasks.filter(x => !x.done && x.due && x.due > t && daysBetween(t, x.due) <= 7).forEach(x => out.push([daysBetween(t, x.due), `${AREAS[x.area].icon} ${shown(x.area, x.title)}`, x.due]));
   S.prospects.filter(p => p.nextDate && !['won', 'lost'].includes(p.status) && daysBetween(t, p.nextDate) <= 7).forEach(p => out.push([daysBetween(t, p.nextDate), `💼 Relancer ${p.name}`, p.nextDate]));
   out.sort((a, b) => a[0] - b[0]);
   return `<section class="card"><header><h2>🗓️ À venir</h2></header>
@@ -736,7 +750,7 @@ function vAgenda() {
       <div class="week">${[0, 1, 2, 3, 4, 5, 6].map(i => { const x = addDays(wk, i); return `<div class="day ${x === today() ? 'today' : ''}">
         <h3 data-a="agenda-go" data-d="${x}">${DAYS_SHORT[parse(x).getDay()]} ${parse(x).getDate()}</h3>
         ${itemsOn(x).map(it => { const c = it.kind === 'r' ? check(x, it.r.id) : (it.t.done ? 'done' : ''); return `<div class="row top"><span class="dot" style="background:${AREAS[it.area].color};margin-top:5px"></span>
-          <span class="${c === 'done' ? 'done' : ''}"><b>${esc(it.time)}</b> ${esc(it.title)}${c === 'done' ? ' ✓' : c === 'skip' ? ' ✗' : ''}</span></div>`; }).join('')}
+          <span class="${c === 'done' ? 'done' : ''}"><b>${esc(it.time)}</b> ${esc(shown(it.area, it.title))}${c === 'done' ? ' ✓' : c === 'skip' ? ' ✗' : ''}</span></div>`; }).join('')}
       </div>`; }).join('')}</div>
     </section>
     <section class="card wide"><header><h2>Toutes mes alertes</h2></header>
@@ -980,12 +994,12 @@ function monthReview() {
       <label>Est-ce que je me rapproche de mes objectifs ? Où est l'écart ?<textarea name="gap" rows="3">${esc(cur.gap)}</textarea></label>
       <label>Qu'est-ce que je change le mois prochain (programme, horaires, priorités) ?<textarea name="change" rows="3">${esc(cur.change)}</textarea></label>
       <label>Mes 3 objectifs pour le mois prochain<textarea name="goals" rows="3">${esc(cur.goals)}</textarea></label>
-      <label>Mon couple et ma famille : comment ça va ?<textarea name="perso" rows="2">${esc(cur.perso)}</textarea></label>
+      ${hidden('perso') ? `<input type="hidden" name="perso" value="${esc(cur.perso)}"><p class="muted small">🔒 La question sur ton couple est dans l'espace Perso verrouillé.</p>` : `<label>Mon couple et ma famille : comment ça va ?<textarea name="perso" rows="2">${esc(cur.perso)}</textarea></label>`}
       <button>Enregistrer le bilan du mois</button>
     </form>
     <section class="card wide"><header><h2>Bilans des mois précédents</h2></header>
       ${S.monthReviews.length ? [...S.monthReviews].sort((a, b) => b.month.localeCompare(a.month)).map(r => `<div class="form"><b>${cap(monthYear(r.month + '-01'))}</b>
-        ${r.gap ? `<p>📏 ${esc(r.gap)}</p>` : ''}${r.change ? `<p>🔧 ${esc(r.change)}</p>` : ''}${r.goals ? `<p>🎯 ${esc(r.goals)}</p>` : ''}${r.perso ? `<p>❤️ ${esc(r.perso)}</p>` : ''}</div>`).join('')
+        ${r.gap ? `<p>📏 ${esc(r.gap)}</p>` : ''}${r.change ? `<p>🔧 ${esc(r.change)}</p>` : ''}${r.goals ? `<p>🎯 ${esc(r.goals)}</p>` : ''}${r.perso && !hidden('perso') ? `<p>❤️ ${esc(r.perso)}</p>` : ''}</div>`).join('')
         : '<p class="muted">Ton premier bilan du mois apparaîtra ici.</p>'}
     </section>
   </div>`;
@@ -1022,6 +1036,7 @@ function vSettings() {
       <div class="row wrap">${LIFE.map(a => `<label>${AREAS[a].icon}<input type="number" name="t_${a}" min="0" max="80" step="0.5" value="${S.targets[a] / 60}" style="width:6em"></label>`).join('')}</div>
       <button>Enregistrer mes objectifs</button>
     </form>
+    ${pinCard()}
     <section class="card"><header><h2>💾 Sauvegarde</h2></header>
       ${NATIVE ? `<p>Sauvegarde automatique : <b>${S.backup.last ? `${shortDate(S.backup.last)} → ${esc(S.backup.where)}` : 'pas encore faite'}</b></p>
         ${S.backup.error ? `<p class="muted small">Détail : ${esc(S.backup.error)}</p>` : ''}
@@ -1037,7 +1052,35 @@ function vSettings() {
   </div>`;
 }
 
-const VIEWS = { home: vHome, agenda: vAgenda, sport: vSport, skills: vSkills, business: vBusiness, perso: vPerso, progress: vProgress, review: vReview, settings: vSettings };
+function vLocked() {
+  const wait = Math.ceil((pinBlockedUntil - Date.now()) / 1000);
+  return `<h1>❤️ Vie privée & couple</h1><p class="sub">Cet espace est protégé par un code PIN.</p>
+  <div class="grid"><form class="card" data-f="pin-unlock"><header><h2>🔒 Entre ton code</h2></header>
+    <input name="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="Code PIN" required>
+    ${wait > 0 ? `<p class="late">Trop d'essais. Réessaie dans ${wait} s.</p>` : ''}
+    <button>Déverrouiller</button>
+    <details><summary>Code oublié ?</summary>
+      <p class="muted small">Le code ne peut pas être récupéré. Tu peux retirer le code en effaçant le contenu de l'espace Perso (rappels, dates, idées, tâches et temps perso). Le reste de l'application est conservé.</p>
+      <button type="button" class="danger" data-a="pin-forgot">Effacer l'espace Perso et retirer le code</button>
+    </details>
+  </form></div>`;
+}
+function pinCard() {
+  const pinInput = (name, ph) => `<input name="${name}" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="off" placeholder="${ph}" required>`;
+  return `<section class="card"><header><h2>🔒 Code PIN de l'espace Perso</h2></header>
+    ${S.pin ? `<p>Code actif ✅ L'espace Perso se reverrouille dès que tu le quittes ou que tu fermes l'application.</p>
+      <label class="row"><input type="checkbox" data-c="pin-notif" ${S.pin.hideNotif ? 'checked' : ''}> Masquer aussi le texte des alertes perso (« ❤️ Rappel privé »)</label>
+      <details><summary>Changer le code</summary><form class="form" data-f="pin-change">${pinInput('current', 'Code actuel')}${pinInput('pin', 'Nouveau code (4 à 6 chiffres)')}${pinInput('pin2', 'Confirmer le nouveau code')}<button>Changer le code</button></form></details>
+      <details><summary>Retirer le code</summary><form class="form" data-f="pin-remove">${pinInput('current', 'Code actuel')}<button class="danger">Retirer le code</button></form></details>`
+    : `<p class="muted">Protège ton espace privé : rappels pour ton couple, dates importantes, idées cadeaux. Ces éléments seront aussi masqués sur l'accueil et dans l'agenda.</p>
+      <form class="form" data-f="pin-set">${pinInput('pin', 'Code (4 à 6 chiffres)')}${pinInput('pin2', 'Confirmer le code')}
+        <label class="row"><input type="checkbox" name="hideNotif" checked> Masquer aussi le texte des alertes perso</label>
+        <button>Activer le code</button></form>`}
+    <p class="muted small">Le code empêche quelqu'un qui prend ta tablette de lire ton espace privé. Ce n'est pas un chiffrement : les sauvegardes et exports contiennent tes données en clair.</p>
+  </section>`;
+}
+
+const VIEWS = { home: vHome, agenda: vAgenda, sport: vSport, skills: vSkills, business: vBusiness, perso: () => (hidden('perso') ? vLocked() : vPerso()), progress: vProgress, review: vReview, settings: vSettings };
 
 function render() {
   document.getElementById('nav').innerHTML = NAV.map(([k, i, l]) => `<button data-a="tab" data-tab="${k}" class="${k === tab ? 'active' : ''}">${i}<span>${l}</span></button>`).join('');
@@ -1062,7 +1105,7 @@ const closeEdit = () => document.getElementById('edit').close();
 const task = id => S.tasks.find(t => t.id === id);
 const rem = id => S.reminders.find(r => r.id === id);
 const CLICK = {
-  tab: el => { tab = el.dataset.tab; document.getElementById('main').innerHTML = ''; render(); window.scrollTo(0, 0); return false; },
+  tab: el => { if (el.dataset.tab !== 'perso') persoUnlocked = false; tab = el.dataset.tab; document.getElementById('main').innerHTML = ''; render(); window.scrollTo(0, 0); return false; },
   'go-review': el => { reviewMode = el.dataset.m; return CLICK.tab({ dataset: { tab: 'review' } }); },
   'review-mode': el => { reviewMode = el.dataset.m; render(); return false; },
   capture: () => { const d = document.getElementById('capture'); d.showModal(); d.querySelector('textarea').focus(); return false; },
@@ -1114,7 +1157,24 @@ const CLICK = {
     return false;
   },
   'backup-now': () => { autoBackup(true).then(render); return false; },
-  export: () => { exportData(); return false; },
+  export: () => {
+    if (!S.pin) { exportData(); return false; }
+    const pin = prompt("Code PIN de l'espace Perso (l'export contient tes données privées) :");
+    if (pin) checkPin(pin).then(ok => (ok ? exportData() : alert('Code incorrect.')));
+    return false;
+  },
+  'pin-forgot': () => {
+    if (!confirm("Effacer tout le contenu de l'espace Perso et retirer le code ? C'est définitif.")) return false;
+    const gone = new Set(S.reminders.filter(r => r.area === 'perso').map(r => r.id));
+    S.reminders = S.reminders.filter(r => !gone.has(r.id));
+    S.tasks = S.tasks.filter(t => t.area !== 'perso');
+    S.logs = S.logs.filter(l => l.area !== 'perso');
+    S.projects = S.projects.filter(p => p.area !== 'perso');
+    S.ideas = [];
+    Object.values(S.checks).forEach(c => gone.forEach(id => delete c[id]));
+    S.monthReviews.forEach(r => { r.perso = ''; });
+    S.pin = null;
+  },
   reset: () => { if (!confirm('Effacer toutes tes données et repartir du modèle de départ ?')) return false; S = seed(); },
 };
 const CHANGE = {
@@ -1125,6 +1185,7 @@ const CHANGE = {
     f.text = t.title; f.task = t.id; f.done = false;
   },
   rtype: el => { el.form.dataset.type = el.value; return false; },
+  'pin-notif': el => { S.pin.hideNotif = el.checked; },
   'inbox-move': el => {
     const item = S.inbox.find(i => i.id === el.dataset.id);
     if (!item || !el.value) return false;
@@ -1152,7 +1213,41 @@ function remFromForm(d, fd, base = {}) {
     before: d.type === 'yearly' ? +d.before || 0 : 0, note: d.note, duration: +d.duration || 0, track: !!d.track,
   };
 }
+const validPin = (a, b) => {
+  if (!/^\d{4,6}$/.test(a)) { alert('Le code doit contenir 4 à 6 chiffres.'); return false; }
+  if (a !== b) { alert('Les deux codes ne sont pas identiques.'); return false; }
+  return true;
+};
+async function setPin(pin, hideNotif) {
+  const salt = uid();
+  S.pin = { salt, hash: await hashPin(pin, salt), hideNotif };
+  persoUnlocked = false;
+  save(); render();
+}
 const SUBMIT = {
+  'pin-unlock': (f, d) => {
+    if (Date.now() < pinBlockedUntil) { render(); return false; }
+    checkPin(d.pin).then(ok => {
+      if (ok) { persoUnlocked = true; pinFails = 0; }
+      else {
+        pinFails++;
+        if (pinFails >= 5) { pinBlockedUntil = Date.now() + 30000; pinFails = 0; setTimeout(render, 30500); }
+        alert('Code incorrect.');
+      }
+      render();
+    });
+    return false;
+  },
+  'pin-set': (f, d) => { if (validPin(d.pin, d.pin2)) setPin(d.pin, !!d.hideNotif).then(() => alert('Code activé.')); return false; },
+  'pin-change': (f, d) => {
+    if (!validPin(d.pin, d.pin2)) return false;
+    checkPin(d.current).then(ok => (ok ? setPin(d.pin, S.pin.hideNotif).then(() => alert('Code changé.')) : alert('Code actuel incorrect.')));
+    return false;
+  },
+  'pin-remove': (f, d) => {
+    checkPin(d.current).then(ok => { if (!ok) return alert('Code incorrect.'); S.pin = null; save(); render(); alert('Code retiré.'); });
+    return false;
+  },
   capture: (f, d) => { S.inbox.push({ id: uid(), text: d.text, created: today() }); document.getElementById('capture').close(); },
   'task-add': (f, d) => {
     S.tasks.push({ id: uid(), area: f.dataset.area, title: d.title, project: d.project || '', priority: d.priority, due: d.due, time: d.time, remind: !!d.remind && !!d.due, done: false, doneAt: '' });
@@ -1266,6 +1361,7 @@ document.addEventListener('submit', e => {
 // ---------- Démarrage ----------
 S = load();
 render();
+document.addEventListener('visibilitychange', () => { if (document.hidden && persoUnlocked) { persoUnlocked = false; render(); } });
 if (NATIVE) {
   setupNotificationActions().catch(() => {});
   // Reprogramme les alertes à chaque ouverture (renouvelle aussi les dates annuelles) + sauvegarde du jour.
